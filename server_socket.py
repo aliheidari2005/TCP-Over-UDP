@@ -9,6 +9,8 @@ import socket as so
 import threading
 import time
 
+connectionqueue = False
+
 
 class ServerSocket(TCPSocket):
 
@@ -29,95 +31,6 @@ class ServerSocket(TCPSocket):
         self.listener_thread = threading.Thread(
             target=self._listen_for_connections, daemon=True)
         self.listener_thread.start()
-
-    # def _listen_for_connections(self):
-    #     while self.running:
-    #         try:
-    #             pkt, addr = self.receive_packet()
-    #             print(f"server:{pkt.seq_num}")
-    #         except OSError as e:
-    #             if not self.running:
-    #                 # سوکت به‌درستی بسته شده، نیازی به لاگ نیست
-    #                 break
-    #             print(f"[RECEIVE PACKET] OSError: {e}")
-    #             break  # socket closed
-
-    #         if not pkt:
-    #             continue
-
-    #         conn_key = (addr[0], addr[1])
-
-    #         # 🔹 Route to active connection if known (demux)
-    #         if conn_key in self.active_connections:
-    #             # Let the connection's receiver thread handle it
-    #             continue
-
-    #         # 🔹 Handle new connection attempt
-    #         if pkt.flags & SYN:
-    #             print(f"[HANDSHAKE] Received SYN from {addr}")
-
-    #             if self.listen_queue.full():
-    #                 print("[HANDSHAKE] Queue full. Ignoring new SYN.")
-    #                 continue
-
-    #             server_seq = random.randint(1000, 5000)
-
-    #             syn_ack = Packet(
-    #                 src_port=pkt.dest_port,
-    #                 dest_port=pkt.src_port,
-    #                 seq_num=server_seq,
-    #                 ack_num=pkt.seq_num + 1,
-    #                 flags=SYN | ACK
-    #             )
-    #             print("[Send] SYN_ACK from [Server] to [Client]:")
-    #             self.remote_address = addr
-    #             self.send_packet(syn_ack)
-
-    #             # 🔹 Wait for ACK to complete handshake
-    #             ack_received = False
-
-    #             for _ in range(5):
-    #                 pkt2, addr2 = self.receive_packet()
-    #                 if not pkt2:
-    #                     continue
-    #                 if pkt2.flags & ACK and pkt2.ack_num == server_seq + 1:
-    #                     print(
-    #                         f"[HANDSHAKE] Connection established with {addr2}")
-    #                     conn = Connection(
-    #                         socket=self,
-    #                         client_addr=addr,
-    #                         seq=server_seq + 1,
-    #                         ack=pkt2.seq_num,
-    #                     )
-    #                     self.active_connections[conn_key] = conn
-    #                     self.listen_queue.put(conn)
-    #                     ack_received = True
-    #                     break
-
-    #             if not ack_received:
-    #                 print("[HANDSHAKE] Failed to complete handshake, sending RST")
-    #                 rst = Packet(
-    #                     src_port=pkt.dest_port,
-    #                     dest_port=pkt.src_port,
-    #                     seq_num=0,
-    #                     ack_num=0,
-    #                     flags=0x08  # RST
-    #                 )
-    #                 self.send_packet(rst)
-
-    #             break
-
-    #         else:
-    #             # 🔹 Invalid or unknown packet — reply with RST
-    #             print(f"[LISTEN] Unknown packet from {addr}, sending RST")
-    #             rst = Packet(
-    #                 src_port=pkt.dest_port,
-    #                 dest_port=pkt.src_port,
-    #                 seq_num=0,
-    #                 ack_num=0,
-    #                 flags=0x08  # RST flag
-    #             )
-    #             self.send_packet(rst)
 
     def _listen_for_connections(self):
         while self.running:
@@ -180,6 +93,7 @@ class ServerSocket(TCPSocket):
                         if pkt2.flags & ACK and pkt2.ack_num == server_seq + 1:
                             print(
                                 f"[HANDSHAKE] Connection established with {addr2}")
+                            connectionqueue = True
                             conn = Connection(
                                 socket=self,
                                 client_addr=addr,
@@ -221,6 +135,14 @@ class ServerSocket(TCPSocket):
     def accept(self):
         print("[ACCEPT] Waiting for complete connections in queue...")
         return self.listen_queue.get()
+
+    def remove_connection(self, client_addr):
+
+        if client_addr in self.active_connections:
+            connectionqueue = False
+            print(
+                f"[remove_connection] Removing connection with {client_addr}")
+            del self.active_connections[client_addr]
 
     def close(self):
         print("[SERVER SOCKET] Closing listener socket...")

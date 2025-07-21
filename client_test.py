@@ -18,10 +18,6 @@ def main():
         print(f"[CLIENT] Sending: {message}")
         conn.send(message.encode())
 
-    while (1):
-        # time.sleep(30)
-        {}
-
     # Graceful shutdown
 
 

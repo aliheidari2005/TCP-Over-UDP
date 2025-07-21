@@ -20,6 +20,8 @@ class Connection:
         self.last_probe_time = 0
         # ...
 
+        self.timeout_occurred = False
+
         # --- پارامترهای اصلی اتصال ---
         self.socket = socket
         host_ip = so.gethostbyname(client_addr[0])
@@ -147,174 +149,71 @@ class Connection:
 # چت دو
 
     # کد های اصلی
-    # def _retransmit_loop(self):
-    #     while self.running:
-    #         now = time.monotonic()
-    #         with self.lock:
-    #             items = list(self.buffer.items())
-
-    #         for seq, entry in items:
-    #             with self.lock:
-    #                 window_limit = self.send_base + self.cwnd * Packet.MSS
-    #                 if seq >= window_limit or seq < self.send_base or seq not in self.buffer:
-    #                     continue
-
-    #                 ts = entry["timestamp"]
-    #                 elapsed = now - ts if ts != 0 else 0  # اگر ts==0، یعنی ارسال نشده، پس کاری نکن
-
-    #                 # فقط اگر قبلاً فرستاده شده و timeout شده
-    #                 if ts != 0 and elapsed > self.timeout:
-    #                     print(
-    #                         f"[RETRANSMIT] Resending, {elapsed:.3f} > {self.timeout}: seq {seq}")
-    #                     entry["timestamp"] = time.monotonic()
-    #                     entry["retransmitted"] = True  # <-- این خط جدید است
-
-    #                     try:
-    #                         self.socket.send_packet(entry["packet"])
-    #                         self.last_activity_time = time.monotonic()
-
-    #                     except OSError:
-    #                         pass
-
-    #         time.sleep(0.1)
-
-    # # demenai
-    # def handle_ack(self, ack_num):
-    #     with self.lock:
-    #         # --- بخش ۱: مدیریت ACK تکراری یا قدیمی ---
-    #         if ack_num <= self.send_base:
-    #             if ack_num == self.send_base and self.buffer:
-    #                 # ... منطق Fast Retransmit شما (بدون تغییر) ...
-    #                 self.duplicate_ack_count[ack_num] = self.duplicate_ack_count.get(
-    #                     ack_num, 0) + 1
-    #                 print(
-    #                     f"[DUP-ACK] {ack_num} : {self.duplicate_ack_count[ack_num]}")
-    #                 if self.duplicate_ack_count.get(ack_num, 0) >= 3:
-    #                     print(f"[FAST RETRANSMIT] Triggered for seq {ack_num}")
-    #                     if ack_num in self.buffer:
-    #                         entry = self.buffer[ack_num]
-    #                         entry["retransmitted"] = True
-    #                         entry["timestamp"] = time.monotonic()
-    #                         self.socket.send_packet(entry["packet"])
-    #                         self.duplicate_ack_count[ack_num] = 0
-    #                         self.last_activity_time = time.monotonic()
-
-    #             return
-
-    #         # --- بخش ۲: مدیریت ACK جدید (منطق کاملاً بازنویسی شده) ---
-
-    #         # ۱. محاسبه RTT برای قدیمی‌ترین بسته تایید نشده
-    #         oldest_acked_seq = self.send_base
-    #         if oldest_acked_seq in self.buffer:
-    #             entry = self.buffer[oldest_acked_seq]
-    #             if not entry.get("retransmitted", False):
-    #                 sample_rtt = time.monotonic() - entry["timestamp"]
-
-    #                 if self.is_first_rtt_sample:
-    #                     self.estimated_rtt = sample_rtt
-    #                     self.dev_rtt = sample_rtt / 2
-    #                     self.is_first_rtt_sample = False
-    #                 else:
-    #                     self.dev_rtt = (1 - self.beta) * self.dev_rtt + \
-    #                         self.beta * abs(sample_rtt - self.estimated_rtt)
-    #                     self.estimated_rtt = (
-    #                         1 - self.alpha) * self.estimated_rtt + self.alpha * sample_rtt
-
-    #                 self.timeout = self.estimated_rtt + 4 * self.dev_rtt
-    #                 if self.timeout < 0.2:
-    #                     self.timeout = 0.2
-    #                 print(
-    #                     f"[RTT] Sample for seq {oldest_acked_seq}={sample_rtt:.3f}, New Timeout={self.timeout:.3f}")
-
-    #         # ۲. جلو بردن پنجره ارسال
-    #         self.send_base = ack_num
-    #         self.duplicate_ack_count.clear()
-
-    #         # ۳. حذف تمام بسته‌های تایید شده از بافر
-    #         keys_to_delete = [
-    #             seq for seq in self.buffer if seq < self.send_base]
-    #         for seq in keys_to_delete:
-    #             try:
-    #                 del self.buffer[seq]
-    #             except KeyError:
-    #                 pass
-
-    #         print(
-    #             f"[ACK] Handled new ACK {ack_num}, new send_base={self.send_base}")
-
     def _retransmit_loop(self):
         while self.running:
             now = time.monotonic()
 
-            # --- بخش ۱: باز ارسال بسته‌های زمان‌بندی شده (Timeout) ---
             items_to_check = []
             with self.lock:
                 items_to_check = list(self.buffer.items())
 
             for seq, entry in items_to_check:
-                # فقط زمانی که نیاز به باز ارسال است، قفل را بگیر
                 ts = entry["timestamp"]
                 elapsed = now - ts if ts != 0 else 0
+
                 if ts != 0 and elapsed > self.timeout:
                     with self.lock:
-                        # دوباره چک کن تا مطمئن شوی بسته هنوز نیاز به باز ارسال دارد
                         if seq in self.buffer and seq >= self.send_base:
-                            current_entry = self.buffer[seq]
-                            if time.monotonic() - current_entry["timestamp"] > self.timeout:
+                            # --- منطق کنترل ازدحام: واکنش به تایم‌اوت ---
+                            if not getattr(self, 'timeout_occurred', False):
+                                self.cwnd = 1
+                                self.timeout_occurred = True
                                 print(
-                                    f"[RETRANSMIT] Resending, {elapsed:.3f} > {self.timeout}: seq {seq}")
-                                current_entry["timestamp"] = time.monotonic()
-                                current_entry["retransmitted"] = True
-                                self.last_activity_time = time.monotonic()
-                                try:
-                                    self.socket.send_packet(
-                                        current_entry["packet"])
-                                except OSError:
-                                    pass
+                                    f"[CWND] Timeout detected, cwnd reset to {self.cwnd}")
+                            # -----------------------------------------
 
-            # --- بخش ۲: کاوش پنجره صفر (Zero-Window Probe) ---
+                            print(
+                                f"[RETRANSMIT] Resending, {elapsed:.3f} > {self.timeout}: seq {seq}")
+                            self.buffer[seq]["timestamp"] = time.monotonic()
+                            self.buffer[seq]["retransmitted"] = True
+                            self.last_activity_time = time.monotonic()
+                            try:
+                                self.socket.send_packet(
+                                    self.buffer[seq]["packet"])
+                            except OSError:
+                                pass
+
+            # ... (منطق Zero-Window Probe در اینجا قرار می‌گیرد) ...
             with self.lock:
                 if self.persist_timer_on and self.rwnd == 0:
                     if now - self.last_probe_time > self.timeout:
                         print(
                             "[PROBE] Zero window detected. Sending probe packet...")
-
-                        # محاسبه فضای خالی بافر خودمان برای ارسال در بسته کاوشگر
                         bytes_in_buffer = sum(len(d)
                                               for d in self.recv_buffer.values())
                         available_space = self.max_recv_buffer - bytes_in_buffer
-
                         probe_pkt = Packet(
-                            src_port=self.socket.local_address[1],
-                            dest_port=self.client_addr[1],
-                            seq_num=self.next_seq,
-                            ack_num=self.recv_ack,
-                            flags=ACK,
-                            # ارسال وضعیت پنجره خودمان
-                            window_size=max(0, available_space)
+                            src_port=self.socket.local_address[1], dest_port=self.client_addr[1],
+                            seq_num=self.next_seq, ack_num=self.recv_ack,
+                            flags=ACK, window_size=max(0, available_space)
                         )
-
                         try:
                             self.socket.send_packet(probe_pkt)
                             self.last_activity_time = time.monotonic()
                         except OSError:
                             pass
-
-                        self.last_probe_time = now  # ریست کردن تایمر کاوشگر
+                        self.last_probe_time = now
 
             time.sleep(0.1)
 
     def handle_ack(self, ack_num):
         with self.lock:
-            # --- فعال/غیرفعال کردن تایمر کاوشگر بر اساس rwnd ---
-            # این منطق به اینجا منتقل شد چون handle_ack فقط توسط فرستنده داده اجرا می‌شود
             if self.rwnd == 0:
                 if not self.persist_timer_on:
                     self.last_probe_time = time.monotonic()
                 self.persist_timer_on = True
             else:
                 self.persist_timer_on = False
-            # --------------------------------------------------
 
             # --- بخش ۱: مدیریت ACK تکراری یا قدیمی ---
             if ack_num <= self.send_base:
@@ -327,193 +226,160 @@ class Connection:
                     if self.duplicate_ack_count.get(ack_num, 0) >= 3:
                         print(f"[FAST RETRANSMIT] Triggered for seq {ack_num}")
                         if ack_num in self.buffer:
+                            # --- منطق کنترل ازدحام: Fast Recovery ---
+                            self.cwnd = max(1, self.cwnd // 2)
+                            print(
+                                f"[CWND] Fast Retransmit, cwnd halved to {self.cwnd}")
+                            # ------------------------------------
+
                             entry = self.buffer[ack_num]
                             entry["retransmitted"] = True
                             entry["timestamp"] = time.monotonic()
                             self.socket.send_packet(entry["packet"])
                             self.last_activity_time = time.monotonic()
                             self.duplicate_ack_count[ack_num] = 0
-                            self.cwnd = max(1, self.cwnd // 2)
-
                 return
 
             # --- بخش ۲: مدیریت ACK جدید ---
-            oldest_acked_seq = self.send_base
-            if oldest_acked_seq in self.buffer:
-                entry = self.buffer[oldest_acked_seq]
-                if not entry.get("retransmitted", False):
-                    sample_rtt = time.monotonic() - entry["timestamp"]
-                    if self.is_first_rtt_sample:
-                        self.estimated_rtt = sample_rtt
-                        self.dev_rtt = sample_rtt / 2
-                        self.is_first_rtt_sample = False
-                    else:
-                        self.dev_rtt = (1 - self.beta) * self.dev_rtt + \
-                            self.beta * abs(sample_rtt - self.estimated_rtt)
-                        self.estimated_rtt = (
-                            1 - self.alpha) * self.estimated_rtt + self.alpha * sample_rtt
+            else:  # <--- این else بسیار مهم است
+                # با رسیدن ACK جدید، یعنی شبکه سالم است
+                self.timeout_occurred = False
 
-                    self.timeout = self.estimated_rtt + 4 * self.dev_rtt
-                    if self.timeout < 0.2:
-                        self.timeout = 0.2
-                    print(
-                        f"[RTT] Sample for seq {oldest_acked_seq}={sample_rtt:.3f}, New Timeout={self.timeout:.3f}")
+                # منطق کنترل ازدحام: Congestion Avoidance / Slow Start
+                self.cwnd += 1
+                print(
+                    f"[CWND] New ACK received, cwnd increased to {self.cwnd}")
 
-            self.send_base = ack_num
-            self.duplicate_ack_count.clear()
+                # محاسبه RTT
+                oldest_acked_seq = self.send_base
+                if oldest_acked_seq in self.buffer:
+                    entry = self.buffer[oldest_acked_seq]
+                    if not entry.get("retransmitted", False):
+                        sample_rtt = time.monotonic() - entry["timestamp"]
+                        if self.is_first_rtt_sample:
+                            self.estimated_rtt = sample_rtt
+                            self.dev_rtt = sample_rtt / 2
+                            self.is_first_rtt_sample = False
+                        else:
+                            self.dev_rtt = (
+                                1 - self.beta) * self.dev_rtt + self.beta * abs(sample_rtt - self.estimated_rtt)
+                            self.estimated_rtt = (
+                                1 - self.alpha) * self.estimated_rtt + self.alpha * sample_rtt
 
-            keys_to_delete = [
-                seq for seq in self.buffer if seq < self.send_base]
-            for seq in keys_to_delete:
-                try:
-                    del self.buffer[seq]
-                except KeyError:
-                    pass
+                        self.timeout = self.estimated_rtt + 4 * self.dev_rtt
+                        if self.timeout < 0.2:
+                            self.timeout = 0.2
+                        print(
+                            f"[RTT] Sample for seq {oldest_acked_seq}={sample_rtt:.3f}, New Timeout={self.timeout:.3f}")
 
-            print(
-                f"[ACK] Handled new ACK {ack_num}, new send_base={self.send_base}")
+                # جلو بردن پنجره ارسال و پاک‌سازی بافر
+                self.send_base = ack_num
+                self.duplicate_ack_count.clear()
+                keys_to_delete = [
+                    seq for seq in self.buffer if seq < self.send_base]
+                for seq in keys_to_delete:
+                    try:
+                        del self.buffer[seq]
+                    except KeyError:
+                        pass
+
+                print(
+                    f"[ACK] Handled new ACK {ack_num}, new send_base={self.send_base}")
 
     def _receiver_loop(self):
         while self.running:
             try:
                 pkt, addr = self.socket.receive_packet()
-                if pkt:
-                    self.rwnd = pkt.window_size
-                    self.last_activity_time = time.monotonic()
-
-                    if self.rwnd == 0:
-                        self.persist_timer_on = True
-                        self.last_probe_time = time.monotonic()  # تایمر را از همین الان شروع کن
-                    else:
-                        self.persist_timer_on = False
-
-                    # print(pkt.ack_num)
-
             except OSError:
-                break  # ✅ سوکت بسته شده
-
-            # print(self.expected_seq)
+                break
             if not pkt or addr != self.client_addr:
                 continue
 
-                # print(f"[RECEIVER LOOP] Received: {pkt}")
-            # if self.expected_seq is None:
-            #     self.expected_seq = pkt.seq_num
-
-            # print(self.expected_seq, 125)
-
-            time.sleep(0.5)
+            with self.lock:
+                self.rwnd = pkt.window_size
+                self.last_activity_time = time.monotonic()
 
             if len(pkt.payload) > 0:
-                seq = pkt.seq_num
                 with self.lock:
-
-                    print(
-                        f"[RECV] Received packet: SEQ={seq}, ACK={pkt.ack_num}, FLAGS={pkt.flags}, LEN={len(pkt.payload)}")
-
+                    seq = pkt.seq_num
                     if seq < self.expected_seq:
+                        pass
+                    elif seq >= self.expected_seq:
+                        if seq not in self.recv_buffer:
+                            self.recv_buffer[seq] = pkt.payload
+                    while self.expected_seq in self.recv_buffer:
+                        data = self.recv_buffer.pop(self.expected_seq)
+                        self.expected_seq += len(data)
                         print(
-                            f"[RECV] Duplicate packet (SEQ={seq}), already delivered. Ignoring.")
+                            f"[DELIVER] Accepting in-order data (len={len(data)})")
 
-                    elif seq == self.expected_seq:
-                        # فقط بسته‌ای که دقیقا انتظارش را داریم ذخیره کن
-                        self.recv_buffer[seq] = pkt.payload
-                        while self.expected_seq in self.recv_buffer:
-                            data = self.recv_buffer.pop(self.expected_seq)
-                            print("[DELIVER] Accepting in-order data")
-                            self.expected_seq += len(data)
-                            # self.recv_data.extend(data)
-
-                            print("--- SERVER IS SLOWLY PROCESSING DATA ---")
-                            time.sleep(0.5)
-
-                    elif seq in self.recv_buffer:
-                        # بسته تکراری، از قبل داریمش
-                        print(f"[RECV] Duplicate packet: SEQ={seq}")
-
-                    else:
-                        # بسته out-of-order دریافت شده
-                        print(
-                            f"[RECV] Out-of-order packet: SEQ={seq}, buffering for future")
-                        # optionally: می‌تونی این خط رو حذف کنی اگه نخوای buffer out-of-order داشته باشی
-                        self.recv_buffer[seq] = pkt.payload
-
-                bytes_in_buffer = sum(len(data)
-                                      for data in self.recv_buffer.values())
-                available_space = self.max_recv_buffer - bytes_in_buffer
-                if available_space < 0:
-                    available_space = 0
-
-                # ارسال ACK با مقدار فعلی expected_seq
-                ack_pkt = Packet(
-                    src_port=self.socket.local_address[1],
-                    dest_port=self.client_addr[1],
-                    seq_num=self.next_seq,
-                    ack_num=self.expected_seq,
-                    flags=ACK,
-                    window_size=available_space
-                )
-                self.socket.send_packet(ack_pkt)
-                print(
-                    f"[RECEIVER LOOP] Sent ACK={self.expected_seq} with Window={available_space}")
-                # print(f"time: {time.time()}")
-
-            elif pkt.flags & FIN:
-                print("[RECEIVER LOOP] FIN received")
-                fin_ack = Packet(
-                    src_port=self.socket.local_address[1],
-                    dest_port=self.client_addr[1],
-                    seq_num=self.next_seq,
-                    ack_num=pkt.seq_num + 1,
-                    flags=6
-                )
-                self.socket.send_packet(fin_ack)
-                print("[RECEIVER LOOP] Sent FIN|ACK")
-                # self.got_fin_from_remote.set()
+                with self.lock:
+                    bytes_in_buffer = sum(len(d)
+                                          for d in self.recv_buffer.values())
+                    available_space = self.max_recv_buffer - bytes_in_buffer
+                    ack_pkt = Packet(
+                        src_port=self.socket.local_address[1],
+                        dest_port=self.client_addr[1],
+                        seq_num=self.next_seq,
+                        ack_num=self.expected_seq,
+                        flags=ACK,
+                        window_size=max(0, available_space)
+                    )
+                    self.socket.send_packet(ack_pkt)
+                    print(
+                        f"[RECEIVER LOOP] Sent ACK={self.expected_seq} with Window={max(0, available_space)}")
 
             elif pkt.flags & ACK:
-
-                print(f"[RECV] Got ACK={pkt.ack_num} from remote")
-                print(f"[RECEIVER LOOP] Handling ACK {pkt.ack_num}")
-                print(self.fin_sent, self.next_seq)
-                if not self.fin_sent and pkt.ack_num == self.next_seq:
+                print(self.fin_sent)
+                if self.fin_sent and pkt.ack_num >= self.next_seq:
                     print("[RECEIVER LOOP] Received ACK for our FIN.")
                     self.got_ack_for_fin.set()
+                    self.socket.remove_connection(self.client_addr)
+                else:
+                    self.handle_ack(pkt.ack_num)
 
-                self.handle_ack(pkt.ack_num)
-
-            elif pkt.flags & RST:
-                print(
-                    f"[RST] Received RST from {addr}. Connection should be closed.")
-                self.close()
-                return
+            elif pkt.flags & FIN:
+                print("[RECEIVER LOOP] FIN received, sending FIN_ACK.")
+                with self.lock:
+                    self.expected_seq = max(self.expected_seq, pkt.seq_num + 1)
+                    bytes_in_buffer = sum(len(d)
+                                          for d in self.recv_buffer.values())
+                    available_space = self.max_recv_buffer - bytes_in_buffer
+                    fin_ack_pkt = Packet(
+                        src_port=self.socket.local_address[1],
+                        dest_port=self.client_addr[1],
+                        seq_num=self.next_seq,
+                        ack_num=pkt.seq_num + 1,
+                        flags=FIN_ACK,
+                        window_size=max(0, available_space)
+                    )
+                    self.socket.send_packet(fin_ack_pkt)
+                    got_fin_from_remote.set()
+                    self.fin_sent = True
 
     def _check_idle_timeout(self):
         while self.running:
             time.sleep(5)
-            if time.monotonic() - self.last_activity_time > self.idle_timeout:
+            if self.running and time.monotonic() - self.last_activity_time > self.idle_timeout:
                 print(
                     f"[IDLE TIMEOUT] No activity for {self.idle_timeout}s, closing connection.")
                 self.close()
                 break
 
     def read(self):
-        """Non-blocking: returns assembled in-order data from recv_buffer if available."""
+        # --- اصلاح شد: خطای منطقی در pop ---
         with self.lock:
-            collected = []
-            while self.expected_seq in self.recv_buffer:
-                data = self.recv_buffer.pop(self.expected_seq - 1)
-                collected.append(data)
+            if self.expected_seq in self.recv_buffer:
+                data = self.recv_buffer.pop(self.expected_seq)
                 self.expected_seq += len(data)
-
-            if collected:
-                return b''.join(collected)
-            else:
-                return None  # Nothing available
+                return data
+            return None
 
     def close(self):
-        # time.sleep(0.3)  # کمی تأخیر قبل از بستن، اختیاری
-        print("[CLOSE] Sending FIN...")
+        if not self.running:
+            return
+        print("[CLOSE] Attempting to close connection...")
+        self.running = False  # 🔴 Tell threads to stop first
 
         fin_pkt = Packet(
             src_port=self.socket.local_address[1],
@@ -545,7 +411,6 @@ class Connection:
         print("[CLOSE] Sent final ACK")
 
         # 🛑 پایان کامل
-        self.running = False  # 🔴 Tell threads to stop first
         time.sleep(0.3)
 
         # Wait for threads
