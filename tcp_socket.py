@@ -55,10 +55,10 @@ class TCPSocket:
             # if packet:
             #     print(f"{packet.seq_num} client:")
 
-            # if self.a == 1 and len(packet.payload) > 0:
-            #     print("delete")
-            #     self.a += 1
-            #     return None, None
+            if self.a == 1 and len(packet.payload) > 0:
+                print("delete")
+                self.a += 1
+                return None, None
             if packet.flags == 6:
                 print("[receive_packet] FIN_ACK received")
                 got_fin_from_remote.set()

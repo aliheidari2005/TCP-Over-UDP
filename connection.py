@@ -300,6 +300,7 @@ class Connection:
                 self.last_activity_time = time.monotonic()
 
             if len(pkt.payload) > 0:
+                print(pkt.payload)
                 with self.lock:
                     seq = pkt.seq_num
                     if seq < self.expected_seq:
