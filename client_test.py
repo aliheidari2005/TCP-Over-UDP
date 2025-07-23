@@ -9,7 +9,7 @@ def main():
     client_sock.connect(('127.0.0.1', 12000))
     print("[CLIENT] Connected")
 
-    conn = client_sock.connection  # ✅ استفاده از همان شیء موجود
+    conn = client_sock.connection
     while True:
         message = input()
         if message == "exit":
@@ -17,8 +17,6 @@ def main():
             break
         print(f"[CLIENT] Sending: {message}")
         conn.send(message.encode())
-
-    # Graceful shutdown
 
 
 if __name__ == "__main__":

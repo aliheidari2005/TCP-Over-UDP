@@ -14,16 +14,16 @@ class TCPSocket:
         self.remote_seq = 0
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.setsockopt(
-            socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # ✅ Add this
+            socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.local_address = None
         self.remote_address = None
         self.is_bound = False
         self.is_connected = False
-        self.timeout = 2  # seconds
+        self.timeout = 2
         self.a = 1
+        self.udp_socket.settimeout(2.0)
 
     def bind(self, address):
-        print(address)
         self.udp_socket.bind(address)
         self.local_address = address
         self.is_bound = True
@@ -52,22 +52,20 @@ class TCPSocket:
             data, addr = self.udp_socket.recvfrom(2048)
             packet = Packet.from_bytes(data)
 
-            # if packet:
-            #     print(f"{packet.seq_num} client:")
-
             if self.a == 1 and len(packet.payload) > 0:
-                print("delete")
+                print("[DROP First Packet]")
                 self.a += 1
                 return None, None
             if packet.flags == 6:
                 print("[receive_packet] FIN_ACK received")
                 got_fin_from_remote.set()
                 return None, None
-            # print(packet.ack_num)
-            # print("152")
-            # if packet.payload:
-            #     print(packet.payload)
+
             return packet, addr
+
+        # except socket.timeout:
+        #     print("[RECEIVE] Timeout: no packet received.")
+        #     return None, None
 
         except OSError as e:
             return None, None

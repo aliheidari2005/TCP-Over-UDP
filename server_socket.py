@@ -9,8 +9,6 @@ import socket as so
 import threading
 import time
 
-connectionqueue = False
-
 
 class ServerSocket(TCPSocket):
 
@@ -21,6 +19,7 @@ class ServerSocket(TCPSocket):
         self.active_connections = {}  # (client_ip, client_port) → Connection
         self.listener_thread = None
         self.running = False
+        self.connectionqueue = False
 
     def listen(self, backlog=1):
         self.backlog = backlog
@@ -36,7 +35,6 @@ class ServerSocket(TCPSocket):
         while self.running:
             try:
                 pkt, addr = self.receive_packet()
-                print(f"server:{pkt.seq_num}")
             except OSError as e:
                 if not self.running:
                     break
@@ -48,11 +46,10 @@ class ServerSocket(TCPSocket):
 
             conn_key = (addr[0], addr[1])
 
-            # 🔹 Route to active connection if known (demux)
             if conn_key in self.active_connections:
-                continue  # Connection thread will handle this
+                print("conn_key in active_connections")
+                continue
 
-            # 🔹 Handle new connection attempt
             if pkt.flags & SYN:
                 print(f"[HANDSHAKE] Received SYN from {addr}")
 
@@ -73,14 +70,12 @@ class ServerSocket(TCPSocket):
                 self.remote_address = addr
                 self.send_packet(syn_ack)
 
-                # 🔸 Add timeout for receiving ACK
                 old_timeout = self.udp_socket.gettimeout()
-                self.udp_socket.settimeout(2.0)  # ⏱ Timeout for ACK
+                self.udp_socket.settimeout(2.0)
 
                 ack_received = False
                 try:
                     for _ in range(5):
-                        # time.sleep(4)
                         try:
                             pkt2, addr2 = self.receive_packet()
                         except so.timeout:
@@ -91,9 +86,9 @@ class ServerSocket(TCPSocket):
                             continue
 
                         if pkt2.flags & ACK and pkt2.ack_num == server_seq + 1:
+                            self.connectionqueue = True
                             print(
-                                f"[HANDSHAKE] Connection established with {addr2}")
-                            connectionqueue = True
+                                f"[HANDSHAKE] Connection established with {addr2},{self.connectionqueue}")
                             conn = Connection(
                                 socket=self,
                                 client_addr=addr,
@@ -114,7 +109,7 @@ class ServerSocket(TCPSocket):
                         dest_port=pkt.src_port,
                         seq_num=0,
                         ack_num=0,
-                        flags=0x08  # RST
+                        flags=0x08
                     )
                     self.send_packet(rst)
 
@@ -139,9 +134,11 @@ class ServerSocket(TCPSocket):
     def remove_connection(self, client_addr):
 
         if client_addr in self.active_connections:
-            connectionqueue = False
+            self.connectionqueue = False
             print(
-                f"[remove_connection] Removing connection with {client_addr}")
+                f"[remove_connection] Removing connection with {client_addr}, {self.connectionqueue}")
+            if self.connectionqueue == False:
+                print(self.connectionqueue)
             del self.active_connections[client_addr]
 
     def close(self):

@@ -71,6 +71,7 @@
 #     data = pkt.to_bytes()
 #     parsed = Packet.from_bytes(data)
 #     print(parsed)
+
 import struct
 
 # Flag definitions
@@ -82,12 +83,11 @@ FIN_ACK = 0x06
 
 
 class Packet:
-    HEADER_FORMAT = "!HHIIBHH"  # src_port, dest_port, seq, ack, flags, window, payload_len
+    HEADER_FORMAT = "!HHIIBHH"
     HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
-    MSS = 5  # Maximum Segment Size
+    MSS = 5
 
-    # --- بخش جدید: کلید رمزگذاری ---
-    ENCRYPTION_KEY = 10  # یک عدد ثابت بین 1 تا 255 برای جابجایی بایت‌ها
+    ENCRYPTION_KEY = 10
 
     def __init__(self, src_port, dest_port, seq_num, ack_num, flags, window_size=0, payload=b''):
         self.src_port = src_port
@@ -96,15 +96,13 @@ class Packet:
         self.ack_num = ack_num
         self.flags = flags
         self.window_size = window_size
-        self.payload = payload[:self.MSS]  # Enforce MSS
+        self.payload = payload[:self.MSS]
         self.payload_length = len(self.payload)
 
-    # --- متد جدید برای رمزگذاری ---
     def _encrypt(self, data: bytes) -> bytes:
         """هر بایت از دیتا را با کلید جمع کرده و در مد 256 نگه می‌دارد."""
         return bytes([(b + self.ENCRYPTION_KEY) % 256 for b in data])
 
-    # --- متد جدید برای رمزگشایی ---
     def _decrypt(self, data: bytes) -> bytes:
         """هر بایت از دیتا را از کلید کم کرده و در مد 256 نگه می‌دارد."""
         return bytes([(b - self.ENCRYPTION_KEY) % 256 for b in data])
